@@ -1,0 +1,105 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  xgen-audio-service — standalone GPU voice services for XGEN
+#
+#  Two independent HTTP services, deployed on a GPU box. XGEN (a separate
+#  server) talks to them over the network by endpoint only — these containers
+#  host NO application logic, they just serve TTS and STT.
+#
+#    • omnivoice    (TTS)  → :9881   POST /tts · GET /voices · /languages · /health
+#    • whisper-stt  (STT)  → :8001   POST /v1/audio/transcriptions · /health
+#
+#  Multi-GPU: each service is PINNED to a GPU via *_GPU_ID (see .env). Default
+#  pins both to GPU 0 (safe on any box; they split VRAM via the *_GPU_MEMORY_
+#  FRACTION knobs). On a multi-GPU box, put them on separate GPUs:
+#      OMNIVOICE_GPU_ID=0   WHISPER_GPU_ID=1
+#  For a GPU POOL (many omnivoice replicas + LB, or tensor-parallel whisper) see
+#  deploy/gpu-pool.example.yml.
+#
+#  Requires an NVIDIA GPU + nvidia-container-toolkit.
+#  Deploy:  cp .env.example .env  →  edit  →  docker compose up --build -d
+# ─────────────────────────────────────────────────────────────────────────────
+services:
+  omnivoice:
+    build:
+      context: ./omnivoice
+      dockerfile: Dockerfile
+    image: xgen-omnivoice:latest
+    container_name: xgen-omnivoice
+    init: true
+    restart: unless-stopped
+    ports:
+      - "${OMNIVOICE_HOST_PORT:-9881}:9881"
+    environment:
+      - OMNIVOICE_MODEL=${OMNIVOICE_MODEL:-k2-fsa/OmniVoice}
+      # cuda:0 = the FIRST GPU VISIBLE to this container. device_ids below pins
+      # WHICH physical GPU that is — so keep this cuda:0 and change *_GPU_ID.
+      - OMNIVOICE_DEVICE=cuda:0
+      - OMNIVOICE_DTYPE=${OMNIVOICE_DTYPE:-float16}
+      - OMNIVOICE_MAX_CONCURRENCY=${OMNIVOICE_MAX_CONCURRENCY:-2}
+      - OMNIVOICE_DEFAULT_NUM_STEP=${OMNIVOICE_DEFAULT_NUM_STEP:-24}
+      - OMNIVOICE_GPU_MEMORY_FRACTION=${OMNIVOICE_GPU_MEMORY_FRACTION:-0.65}
+      - PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}
+      - OMNIVOICE_AUTO_ASR=${OMNIVOICE_AUTO_ASR:-false}
+      - OMNIVOICE_LOG_LEVEL=${OMNIVOICE_LOG_LEVEL:-info}
+      - HF_ENDPOINT=${HF_ENDPOINT:-https://huggingface.co}
+    volumes:
+      - ./voices:/voices:ro
+      - omnivoice-models:/models
+    shm_size: ${OMNIVOICE_SHM_SIZE:-8G}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${OMNIVOICE_GPU_ID:-0}"]
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9881/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 300s
+
+  whisper-stt:
+    build:
+      context: ./whisper-stt
+      dockerfile: Dockerfile
+    image: xgen-whisper-stt:latest
+    container_name: xgen-whisper-stt
+    init: true
+    restart: unless-stopped
+    ports:
+      - "${WHISPER_HOST_PORT:-8001}:8001"
+    environment:
+      - WHISPER_MODEL=${WHISPER_MODEL:-openai/whisper-large-v3}
+      - WHISPER_PORT=8001
+      - WHISPER_GPU_MEMORY_FRACTION=${WHISPER_GPU_MEMORY_FRACTION:-0.35}
+      - WHISPER_DTYPE=${WHISPER_DTYPE:-auto}
+      # Blackwell (RTX 50xx) safe default; see whisper-stt/entrypoint.sh.
+      - WHISPER_ATTENTION_BACKEND=${WHISPER_ATTENTION_BACKEND:-TRITON_ATTN}
+      # Shard across N GPUs (default 1). Raise only for a bigger STT model; the
+      # container must see that many GPUs (give WHISPER_GPU_ID multiple ids via
+      # deploy/gpu-pool.example.yml).
+      - WHISPER_TENSOR_PARALLEL=${WHISPER_TENSOR_PARALLEL:-1}
+      - HUGGINGFACE_HUB_TOKEN=${HUGGINGFACE_HUB_TOKEN:-}
+      - HF_ENDPOINT=${HF_ENDPOINT:-https://huggingface.co}
+    volumes:
+      - whisper-cache:/cache/huggingface
+    shm_size: ${WHISPER_SHM_SIZE:-4G}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${WHISPER_GPU_ID:-0}"]
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 600s
+
+volumes:
+  omnivoice-models:
+  whisper-cache:

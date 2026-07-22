@@ -1,0 +1,118 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  GPU-POOL example — scale across many GPUs.
+#
+#  OmniVoice is single-GPU per process (GPU-serialised internally), so TTS
+#  THROUGHPUT scales by running one replica PER GPU behind a load balancer that
+#  exposes a single stable endpoint. Whisper gets its own GPU (or shard it with
+#  WHISPER_TENSOR_PARALLEL over several).
+#
+#  This example assumes a 4-GPU box:
+#     GPU 0,1,2 → three omnivoice replicas   (nginx LB fronts them on :9881)
+#     GPU 3     → whisper-stt                 (:8001)
+#  Adjust the device_ids / number of replicas to your box.
+#
+#  Deploy (from the repo root):
+#     docker compose -f deploy/gpu-pool.example.yml up --build -d
+#
+#  Clients still see ONE TTS endpoint (:9881) and ONE STT endpoint (:8001).
+# ─────────────────────────────────────────────────────────────────────────────
+x-omnivoice-common: &omnivoice-common
+  build:
+    context: ../omnivoice
+    dockerfile: Dockerfile
+  image: xgen-omnivoice:latest
+  init: true
+  restart: unless-stopped
+  environment:
+    - OMNIVOICE_MODEL=${OMNIVOICE_MODEL:-k2-fsa/OmniVoice}
+    - OMNIVOICE_DEVICE=cuda:0            # first VISIBLE gpu (device_ids pins it)
+    - OMNIVOICE_DTYPE=${OMNIVOICE_DTYPE:-float16}
+    - OMNIVOICE_MAX_CONCURRENCY=${OMNIVOICE_MAX_CONCURRENCY:-2}
+    - OMNIVOICE_DEFAULT_NUM_STEP=${OMNIVOICE_DEFAULT_NUM_STEP:-24}
+    - OMNIVOICE_GPU_MEMORY_FRACTION=${OMNIVOICE_GPU_MEMORY_FRACTION:-0.85}
+    - PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}
+    - OMNIVOICE_LOG_LEVEL=${OMNIVOICE_LOG_LEVEL:-info}
+    - HF_ENDPOINT=${HF_ENDPOINT:-https://huggingface.co}
+  volumes:
+    - ../voices:/voices:ro
+    - omnivoice-models:/models          # shared read-only HF cache across replicas
+  shm_size: ${OMNIVOICE_SHM_SIZE:-8G}
+  expose:
+    - "9881"                            # internal only — nginx fronts them
+  healthcheck:
+    test: ["CMD", "curl", "-fsS", "http://localhost:9881/health"]
+    interval: 30s
+    timeout: 10s
+    retries: 3
+    start_period: 300s
+
+services:
+  omnivoice-0:
+    <<: *omnivoice-common
+    container_name: xgen-omnivoice-0
+    deploy: { resources: { reservations: { devices: [{ driver: nvidia, device_ids: ["0"], capabilities: [gpu] }] } } }
+  omnivoice-1:
+    <<: *omnivoice-common
+    container_name: xgen-omnivoice-1
+    deploy: { resources: { reservations: { devices: [{ driver: nvidia, device_ids: ["1"], capabilities: [gpu] }] } } }
+  omnivoice-2:
+    <<: *omnivoice-common
+    container_name: xgen-omnivoice-2
+    deploy: { resources: { reservations: { devices: [{ driver: nvidia, device_ids: ["2"], capabilities: [gpu] }] } } }
+
+  # Single stable TTS endpoint → round-robins across the replicas above.
+  omnivoice-lb:
+    image: nginx:1.27-alpine
+    container_name: xgen-omnivoice-lb
+    init: true
+    restart: unless-stopped
+    ports:
+      - "${OMNIVOICE_HOST_PORT:-9881}:9881"
+    volumes:
+      - ./nginx-omnivoice-lb.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - omnivoice-0
+      - omnivoice-1
+      - omnivoice-2
+
+  whisper-stt:
+    build:
+      context: ../whisper-stt
+      dockerfile: Dockerfile
+    image: xgen-whisper-stt:latest
+    container_name: xgen-whisper-stt
+    init: true
+    restart: unless-stopped
+    ports:
+      - "${WHISPER_HOST_PORT:-8001}:8001"
+    environment:
+      - WHISPER_MODEL=${WHISPER_MODEL:-openai/whisper-large-v3}
+      - WHISPER_PORT=8001
+      - WHISPER_GPU_MEMORY_FRACTION=${WHISPER_GPU_MEMORY_FRACTION:-0.85}
+      - WHISPER_DTYPE=${WHISPER_DTYPE:-auto}
+      - WHISPER_ATTENTION_BACKEND=${WHISPER_ATTENTION_BACKEND:-TRITON_ATTN}
+      - WHISPER_TENSOR_PARALLEL=${WHISPER_TENSOR_PARALLEL:-1}
+      - HUGGINGFACE_HUB_TOKEN=${HUGGINGFACE_HUB_TOKEN:-}
+      - HF_ENDPOINT=${HF_ENDPOINT:-https://huggingface.co}
+    volumes:
+      - whisper-cache:/cache/huggingface
+    shm_size: ${WHISPER_SHM_SIZE:-4G}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            # one GPU here; for a big STT model give it several ids AND set
+            # WHISPER_TENSOR_PARALLEL to that count.
+            - driver: nvidia
+              device_ids: ["3"]
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 600s
+
+volumes:
+  omnivoice-models:
+  whisper-cache:

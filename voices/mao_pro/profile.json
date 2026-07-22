@@ -1,0 +1,19 @@
+{
+  "name": "mao_pro",
+  "display_name": "마오 (프로)",
+  "description": "감정별 레퍼런스 오디오 포함 보이스 프로필 예시",
+  "engine": "gpt_sovits",
+  "language": "ko",
+  "emotions": {
+    "neutral": "ref_neutral.wav",
+    "joy": "ref_joy.wav",
+    "anger": "ref_anger.wav",
+    "sadness": "ref_sadness.wav",
+    "fear": "ref_fear.wav",
+    "surprise": "ref_surprise.wav",
+    "disgust": "ref_disgust.wav",
+    "smirk": "ref_smirk.wav"
+  },
+  "prompt_text": "안녕하세요, 만나서 반갑습니다.",
+  "prompt_lang": "ko"
+}
