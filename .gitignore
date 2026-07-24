@@ -4,5 +4,7 @@ __pycache__/
 .env
 *.log
 omnivoice/baselines/
-models/
+# 'models/' was too broad — it ignored the SOURCE dir omnivoice/omnivoice_core/models/.
+# Model *weights* live in the docker named volume (omnivoice-models:/models), not the repo.
+/models/            # top-level weights only, if ever bind-mounted
 cache/
