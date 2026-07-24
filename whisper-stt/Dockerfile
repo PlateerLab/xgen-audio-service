@@ -34,7 +34,11 @@
 #  0.10/0.11 line.
 # ──────────────────────────────────────────────────────────────────────
 
-FROM vllm/vllm-openai:latest
+# vLLM 이미지 태그 — 핀 고정 가능(재현성/버전 회귀 대응). 기본 latest.
+# 예: WHISPER_VLLM_TAG=v0.11.0 (docker compose build.args 로 전달). ':latest' 가
+# 최신 vLLM 을 당겨오다 특정 버전에서 엔진 초기화가 깨지면 여기서 검증된 태그로 고정.
+ARG VLLM_TAG=latest
+FROM vllm/vllm-openai:${VLLM_TAG}
 
 # HF model cache — bind to the docker volume so we don't re-download
 # ~3 GB on every container rebuild. The upstream image doesn't set

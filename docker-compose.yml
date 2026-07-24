@@ -64,6 +64,9 @@ services:
     build:
       context: ./whisper-stt
       dockerfile: Dockerfile
+      args:
+        # vLLM 이미지 태그 핀 고정(재현성). 기본 latest. 버전 회귀 시 검증 태그로.
+        VLLM_TAG: ${WHISPER_VLLM_TAG:-latest}
     image: xgen-whisper-stt:latest
     container_name: xgen-whisper-stt
     init: true
@@ -75,8 +78,11 @@ services:
       - WHISPER_PORT=8001
       - WHISPER_GPU_MEMORY_FRACTION=${WHISPER_GPU_MEMORY_FRACTION:-0.35}
       - WHISPER_DTYPE=${WHISPER_DTYPE:-auto}
-      # Blackwell (RTX 50xx) safe default; see whisper-stt/entrypoint.sh.
+      # 어텐션 백엔드: 'auto'(또는 미설정+구 GPU면 TRITON_ATTN). 최신 vLLM+sm_120 은
+      # auto 권장(강제 TRITON_ATTN 이 엔진 초기화를 깨는 경우 있음). entrypoint.sh 참고.
       - WHISPER_ATTENTION_BACKEND=${WHISPER_ATTENTION_BACKEND:-TRITON_ATTN}
+      # eager 강제(기본 1). 최신 vLLM+새 GPU 에서 0 으로 두면 torch.compile 성능 이득 가능.
+      - WHISPER_ENFORCE_EAGER=${WHISPER_ENFORCE_EAGER:-1}
       # Shard across N GPUs (default 1). Raise only for a bigger STT model; the
       # container must see that many GPUs (give WHISPER_GPU_ID multiple ids via
       # deploy/gpu-pool.example.yml).
