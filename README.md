@@ -62,12 +62,17 @@ else changes; the request/response contracts are stable.
 - STT → `http://<gpu-host>:8001`  (`POST /v1/audio/transcriptions`)
 
 ### Example — synthesize
+Just pass a `voice_profile` id (from `GET /voices`) — the server resolves the clone
+reference (and its transcript) from `voices/<profile>/profile.json`, with
+`emotion` → `neutral` → any-available fallback. No need to know on-disk paths.
 ```bash
 curl -X POST http://<gpu-host>:9881/tts \
   -H 'Content-Type: application/json' \
-  -d '{"text":"안녕하세요","voice_profile":"paimon_ko","format":"wav"}' \
+  -d '{"text":"안녕하세요","voice_profile":"paimon_ko","emotion":"joy","format":"wav"}' \
   --output out.wav
 ```
+`emotion` is optional (defaults to `neutral`). Advanced callers can still pass an
+explicit `ref_audio_path` + `mode:"clone"` instead of `voice_profile`.
 ### Example — transcribe
 ```bash
 curl -X POST http://<gpu-host>:8001/v1/audio/transcriptions \
