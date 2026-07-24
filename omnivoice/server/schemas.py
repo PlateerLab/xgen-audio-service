@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, AliasChoices
 
 
 GenerationMode = Literal["clone", "design", "auto"]
@@ -23,10 +23,23 @@ class TTSRequest(BaseModel):
         ),
     )
 
-    # Voice cloning
+    # High-level voice selection (recommended, easy path). Pass a profile id
+    # from GET /voices and the server resolves ref_audio_path + ref_text from
+    # voices_dir/<voice_profile>/profile.json with emotion→neutral→any fallback,
+    # and switches to clone mode. No need to know the on-disk ref file path.
+    voice_profile: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("voice_profile", "voice", "profile"),
+        description="Voice profile id (from GET /voices). Resolves the reference audio server-side; implies mode=clone.",
+    )
+    emotion: Optional[str] = Field(
+        default=None,
+        description="Emotion for voice_profile reference selection (e.g. neutral, joy, anger). Falls back to neutral, then any available.",
+    )
+    # Voice cloning (low-level — usually leave unset and use voice_profile)
     ref_audio_path: Optional[str] = Field(
         default=None,
-        description="Absolute path inside the container to the reference audio file.",
+        description="Absolute path inside the container to the reference audio file. Prefer voice_profile.",
     )
     ref_text: Optional[str] = Field(
         default=None,
@@ -69,10 +82,11 @@ class TTSRequest(BaseModel):
         ),
     )
 
-    # Wire format
+    # Wire format — accepts 'format' as an alias (README/OpenAI-style callers).
     audio_format: AudioFormat = Field(
         default="wav",
-        description="Container format for the response body.",
+        validation_alias=AliasChoices("audio_format", "format"),
+        description="Container format for the response body. Accepts 'format' alias.",
     )
     sample_rate: int = Field(default=24000)
 

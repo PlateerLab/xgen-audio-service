@@ -7,7 +7,7 @@ import base64
 import json
 import logging
 from importlib.metadata import PackageNotFoundError, version
-from typing import Annotated
+from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import StreamingResponse
@@ -97,24 +97,46 @@ def get_languages() -> LanguagesResponse:
     return LanguagesResponse(languages=sorted(LANG_NAMES))
 
 
+def _resolve_voice(req: TTSRequest, settings: Settings) -> tuple[str, Optional[str], Optional[str]]:
+    """voice_profile 이 주어지면(그리고 ref_audio_path 미지정) 서버가 클론 레퍼런스를
+    voices_dir 에서 resolve 한다 — 호출자는 디스크 경로를 몰라도 됨(사용성).
+    emotion→neutral→아무거나 fallback. Returns (mode, ref_audio_path, ref_text)."""
+    if not req.voice_profile or req.ref_audio_path:
+        return req.mode, req.ref_audio_path, req.ref_text
+    ref = voices.resolve_ref_audio(
+        settings.voices_dir, req.voice_profile, req.emotion or "neutral",
+    )
+    if ref is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"voice_profile_not_found_or_no_reference: {req.voice_profile}",
+        )
+    return "clone", ref.file, (req.ref_text or ref.prompt_text)
+
+
 @router.post("/tts")
-async def tts(req: TTSRequest) -> Response:
+async def tts(
+    req: TTSRequest,
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> Response:
     if not engine.is_loaded():
         raise HTTPException(status_code=503, detail="model_not_ready")
+
+    mode, ref_audio_path, ref_text = _resolve_voice(req, settings)
 
     import time as _time
     t0 = _time.monotonic()
     logger.info(
-        "tts: starting single-shot synthesis chars=%d mode=%s ref=%s",
-        len(req.text or ""), req.mode, req.ref_audio_path or "<none>",
+        "tts: starting single-shot synthesis chars=%d mode=%s voice=%s ref=%s",
+        len(req.text or ""), mode, req.voice_profile or "<none>", ref_audio_path or "<none>",
     )
 
     try:
         audio, sample_rate = await engine.synthesize(
             text=req.text,
-            mode=req.mode,
-            ref_audio_path=req.ref_audio_path,
-            ref_text=req.ref_text,
+            mode=mode,
+            ref_audio_path=ref_audio_path,
+            ref_text=ref_text,
             instruct=req.instruct,
             language=req.language,
             speed=req.speed,
@@ -142,7 +164,7 @@ async def tts(req: TTSRequest) -> Response:
     )
     headers = {
         "X-OmniVoice-Sample-Rate": str(sample_rate),
-        "X-OmniVoice-Mode": req.mode,
+        "X-OmniVoice-Mode": mode,
         "X-OmniVoice-Synth-Seconds": f"{synth_dt:.3f}",
         "X-OmniVoice-Audio-Seconds": f"{audio_seconds:.3f}",
         "X-OmniVoice-RTF": f"{rtf:.3f}",
@@ -151,7 +173,10 @@ async def tts(req: TTSRequest) -> Response:
 
 
 @router.post("/tts/stream")
-async def tts_stream(req: TTSStreamRequest) -> StreamingResponse:
+async def tts_stream(
+    req: TTSStreamRequest,
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> StreamingResponse:
     """Sentence-streaming TTS — yields one NDJSON frame per sentence.
 
     Wire format (each line a complete JSON object, newline-terminated):
@@ -204,15 +229,18 @@ async def tts_stream(req: TTSStreamRequest) -> StreamingResponse:
     if not sentences:
         raise HTTPException(status_code=400, detail="empty_text")
 
+    # voice_profile → ref_audio_path/ref_text/mode 서버 resolve (한 번, 모든 문장 공통).
+    mode, ref_audio_path, ref_text = _resolve_voice(req, settings)
+
     sample_rate = req.sample_rate
     media = media_type_for(req.audio_format)
     total_chars = sum(len(s) for s in sentences)
     logger.info(
         "tts/stream: starting %d sentences, %d total chars "
-        "(input_len=%d, max=%d, min=%d, mode=%s, ref=%s)",
+        "(input_len=%d, max=%d, min=%d, mode=%s, voice=%s, ref=%s)",
         len(sentences), total_chars, len(req.text or ""),
         req.max_sentence_chars, req.min_sentence_chars,
-        req.mode, req.ref_audio_path or "<none>",
+        mode, req.voice_profile or "<none>", ref_audio_path or "<none>",
     )
     # Per-sentence char counts at debug level — invaluable for tuning
     # the min_sentence_chars knob ("did the merge actually fire?").
@@ -233,9 +261,9 @@ async def tts_stream(req: TTSStreamRequest) -> StreamingResponse:
         try:
             audio, sr = await engine.synthesize(
                 text=sentence,
-                mode=req.mode,
-                ref_audio_path=req.ref_audio_path,
-                ref_text=req.ref_text,
+                mode=mode,
+                ref_audio_path=ref_audio_path,
+                ref_text=ref_text,
                 instruct=req.instruct,
                 language=req.language,
                 speed=req.speed,
