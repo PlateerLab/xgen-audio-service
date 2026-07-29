@@ -141,8 +141,13 @@ def _profile_dir(voices_dir: str, profile_id: str) -> str:
 
 
 def _write_profile_json(profile_dir: str, data: dict) -> None:
-    with open(os.path.join(profile_dir, "profile.json"), "w", encoding="utf-8") as fh:
-        json.dump(data, fh, ensure_ascii=False, indent=2)
+    try:
+        with open(os.path.join(profile_dir, "profile.json"), "w", encoding="utf-8") as fh:
+            json.dump(data, fh, ensure_ascii=False, indent=2)
+    except OSError as exc:
+        raise VoiceManagementError(
+            500, f"voices directory not writable ({exc.strerror}): mount /voices read-write"
+        ) from exc
 
 
 def _load_for_update(voices_dir: str, profile_id: str) -> tuple[str, dict]:
@@ -161,7 +166,13 @@ def create_profile(voices_dir: str, profile_id: str, display_name: str, language
     pdir = _profile_dir(voices_dir, profile_id)
     if os.path.isdir(pdir):
         raise VoiceManagementError(409, f"voice profile already exists: {profile_id}")
-    os.makedirs(pdir, exist_ok=False)
+    try:
+        os.makedirs(pdir, exist_ok=False)
+    except OSError as exc:
+        # 대표 사례: compose 가 voices 를 :ro 로 마운트 → Read-only file system.
+        raise VoiceManagementError(
+            500, f"voices directory not writable ({exc.strerror}): mount /voices read-write"
+        ) from exc
     _write_profile_json(pdir, {
         "display_name": display_name or profile_id,
         "language": language or None,
@@ -227,8 +238,13 @@ def save_ref(
                 logger.warning("failed to remove old ref %s", old_path)
 
     ref_name = f"ref_{emotion}{ext}"
-    with open(os.path.join(pdir, ref_name), "wb") as fh:
-        fh.write(content)
+    try:
+        with open(os.path.join(pdir, ref_name), "wb") as fh:
+            fh.write(content)
+    except OSError as exc:
+        raise VoiceManagementError(
+            500, f"voices directory not writable ({exc.strerror}): mount /voices read-write"
+        ) from exc
     entry: dict = {"file": ref_name}
     if prompt_text:
         entry["prompt_text"] = prompt_text

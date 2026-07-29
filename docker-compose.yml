@@ -43,7 +43,9 @@ services:
       - OMNIVOICE_LOG_LEVEL=${OMNIVOICE_LOG_LEVEL:-info}
       - HF_ENDPOINT=${HF_ENDPOINT:-https://huggingface.co}
     volumes:
-      - ./voices:/voices:ro
+      # Voice Studio 가 신규 보이스/레퍼런스를 쓴다 — 반드시 rw (구버전 :ro 는
+      # POST /voices 가 'Read-only file system' 으로 500).
+      - ./voices:/voices
       - omnivoice-models:/models
     shm_size: ${OMNIVOICE_SHM_SIZE:-8G}
     deploy:
