@@ -1,0 +1,19 @@
+{
+  "name": "shlee",
+  "display_name": "SHLee (한국어)",
+  "language": "ko",
+  "is_template": true,
+  "emotion_refs": {
+    "neutral": {
+      "file": "ref_neutral.wav",
+      "prompt_text": "어.. 안녕하세요. 저, 플래티어의 이상훈입니다. 그 .. 예 .. 많이 바쁜 부서들이 많은데, 바쁘신 와중에 ..",
+      "prompt_lang": "ko"
+    }
+  },
+  "gpt_sovits_settings": {
+    "top_k": 5,
+    "top_p": 1.0,
+    "temperature": 1.0,
+    "speed_factor": 1.0
+  }
+}
