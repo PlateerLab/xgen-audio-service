@@ -61,6 +61,17 @@ class TTSRequest(BaseModel):
         description="Language code or name. Omit to auto-detect.",
     )
     speed: float = Field(default=1.0, gt=0.0, le=4.0)
+    volume: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=3.0,
+        description=(
+            "Output gain multiplier applied to the synthesized waveform "
+            "(1.0 = as generated, up to 3.0 = +300%). Values are soft-clipped "
+            "to [-1, 1] after gain so boosted audio cannot wrap/distort "
+            "catastrophically."
+        ),
+    )
     duration: Optional[float] = Field(
         default=None,
         gt=0.0,
