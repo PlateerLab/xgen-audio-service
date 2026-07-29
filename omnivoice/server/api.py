@@ -9,8 +9,9 @@ import logging
 from importlib.metadata import PackageNotFoundError, version
 from typing import Annotated, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Response
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
+from fastapi.responses import FileResponse, StreamingResponse
+from pydantic import BaseModel, Field
 
 from server import engine, voices
 from server.schemas import (
@@ -88,6 +89,77 @@ def health(settings: Annotated[Settings, Depends(get_settings)]) -> HealthRespon
 @router.get("/voices", response_model=VoicesResponse)
 def get_voices(settings: Annotated[Settings, Depends(get_settings)]) -> VoicesResponse:
     return VoicesResponse(voices=voices.list_profiles(settings.voices_dir))
+
+
+# ── Voice profile management (XGEN Voice Studio) ────────────────────────────
+
+
+class CreateVoiceRequest(BaseModel):
+    id: str = Field(..., description="Profile id (lowercase a-z0-9_-)")
+    display_name: str = Field("", max_length=100)
+    language: Optional[str] = Field(None, max_length=16)
+
+
+class UpdateVoiceRequest(BaseModel):
+    display_name: Optional[str] = Field(None, max_length=100)
+    language: Optional[str] = Field(None, max_length=16)
+
+
+def _mgmt(fn, *args):
+    try:
+        return fn(*args)
+    except voices.VoiceManagementError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
+
+
+@router.post("/voices")
+async def create_voice(req: CreateVoiceRequest, settings: Annotated[Settings, Depends(get_settings)]):
+    """새 보이스 프로필 생성 (빈 프로필 — 레퍼런스는 /voices/{id}/refs 로 추가)."""
+    return _mgmt(voices.create_profile, settings.voices_dir, req.id, req.display_name, req.language)
+
+
+@router.patch("/voices/{profile_id}")
+async def update_voice(profile_id: str, req: UpdateVoiceRequest,
+                       settings: Annotated[Settings, Depends(get_settings)]):
+    return _mgmt(voices.update_profile, settings.voices_dir, profile_id, req.display_name, req.language)
+
+
+@router.delete("/voices/{profile_id}")
+async def delete_voice(profile_id: str, settings: Annotated[Settings, Depends(get_settings)]):
+    """비-템플릿 보이스 프로필 삭제 (레퍼런스 포함)."""
+    _mgmt(voices.delete_profile, settings.voices_dir, profile_id)
+    return {"ok": True}
+
+
+@router.post("/voices/{profile_id}/refs")
+async def upload_voice_ref(
+    profile_id: str,
+    settings: Annotated[Settings, Depends(get_settings)],
+    file: UploadFile = File(...),
+    emotion: str = Form("neutral"),
+    prompt_text: Optional[str] = Form(None),
+    prompt_lang: Optional[str] = Form(None),
+):
+    """감정 레퍼런스 오디오 업로드/교체 — [오디오 + 전사 텍스트 + 언어]."""
+    content = await file.read()
+    return _mgmt(
+        voices.save_ref, settings.voices_dir, profile_id, emotion,
+        file.filename or "ref.wav", content, prompt_text, prompt_lang,
+    )
+
+
+@router.delete("/voices/{profile_id}/refs/{emotion}")
+async def delete_voice_ref(profile_id: str, emotion: str,
+                           settings: Annotated[Settings, Depends(get_settings)]):
+    return _mgmt(voices.delete_ref, settings.voices_dir, profile_id, emotion)
+
+
+@router.get("/voices/{profile_id}/refs/{emotion}/audio")
+async def get_voice_ref_audio(profile_id: str, emotion: str,
+                              settings: Annotated[Settings, Depends(get_settings)]):
+    """레퍼런스 오디오 재생 (관리 UI 미리듣기)."""
+    path = _mgmt(voices.ref_audio_path, settings.voices_dir, profile_id, emotion)
+    return FileResponse(path)
 
 
 @router.get("/languages", response_model=LanguagesResponse)
