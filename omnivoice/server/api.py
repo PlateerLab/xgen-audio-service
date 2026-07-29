@@ -31,6 +31,16 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _apply_volume(audio, volume: float):
+    """합성 파형에 출력 게인 적용 (1.0 = 무변경). 부스트 시 [-1,1] 클립."""
+    if volume is None or abs(volume - 1.0) < 1e-6:
+        return audio
+    import numpy as np
+
+    out = audio.astype(np.float32) * float(volume)
+    return np.clip(out, -1.0, 1.0)
+
+
 def _service_version() -> str:
     try:
         return version("xgen-omnivoice")
@@ -227,6 +237,7 @@ async def tts(
         raise HTTPException(status_code=500, detail=f"synthesis_failed: {exc}") from exc
 
     synth_dt = _time.monotonic() - t0
+    audio = _apply_volume(audio, req.volume)
     body = encode(audio, sample_rate, req.audio_format)
     audio_seconds = audio.size / float(sample_rate) if sample_rate else 0.0
     rtf = synth_dt / audio_seconds if audio_seconds else float("inf")
@@ -348,6 +359,7 @@ async def tts_stream(
                 seed=sentence_seed,
             )
             synth_dt = _time.monotonic() - sent_t0
+            audio = _apply_volume(audio, req.volume)
             body = encode(audio, sr, req.audio_format)
             audio_seconds = audio.size / float(sr) if sr else 0.0
             rtf = synth_dt / audio_seconds if audio_seconds else float("inf")
