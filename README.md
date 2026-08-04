@@ -55,6 +55,11 @@ GPU-pool deploy:
 docker compose -f deploy/gpu-pool.example.yml up --build -d
 ```
 
+Example - 5090 gpu server
+```bash
+docker compose --env-file deploy/5090-200-server.env up --build -d
+```
+
 ## Connecting XGEN
 Point XGEN's TTS/STT endpoint config at this host's published ports — nothing
 else changes; the request/response contracts are stable.
